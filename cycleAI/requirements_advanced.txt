@@ -1,0 +1,27 @@
+# Advanced Requirements (Optional)
+# These packages are for enhanced features and LangChain integration
+
+# LangChain for advanced agent capabilities
+langchain>=0.1.0
+langchain-openai>=0.0.5
+langchain-community>=0.0.10
+
+# Vector search and embeddings (for RAG features)
+faiss-cpu>=1.7.0
+sentence-transformers>=2.2.0
+
+# Enhanced data processing
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Visualization for autonomous prompt analytics
+plotly>=5.15.0
+
+# Caching and performance
+redis>=4.5.0  # Optional: for distributed caching
+
+# Monitoring and logging
+structlog>=23.0.0
+
+# Testing advanced features
+pytest-asyncio>=0.21.0

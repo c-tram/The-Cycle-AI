@@ -47,9 +47,29 @@ fi
 
 # Get commit message
 if [ $# -eq 0 ]; then
-    # No arguments provided, use default message with timestamp
-    COMMIT_MSG="Auto-commit: $(date '+%Y-%m-%d %H:%M:%S')"
-    print_warning "No commit message provided. Using: '$COMMIT_MSG'"
+    # No arguments provided, use comprehensive update message
+    COMMIT_MSG="🚀 BETA: Major System Refactor: Multi-Modal Baseball AI with Autonomous Capabilities
+
+✨ New Features:
+- 🤖 Autonomous Prompt Generation System
+- 📊 Interactive Analytics Dashboard  
+- 🧠 Advanced LangChain Integration
+- 🏆 Best Team Builder with Explanations
+
+🏗️ Architecture Changes:
+- Organized into Simple/Advanced/Autonomous modes
+- Clean directory structure with shared utilities
+- Proper import paths and module organization
+- Launcher scripts for each mode
+
+🔧 System Improvements:
+- Enhanced error handling and position filtering
+- Quality scoring for automated prompt testing
+- Performance monitoring and insights
+- Comprehensive documentation updates
+
+Built $(date '+%Y-%m-%d %H:%M:%S')"
+    print_warning "Using comprehensive update message for all recent work"
 else
     # Use provided arguments as commit message
     COMMIT_MSG="$*"

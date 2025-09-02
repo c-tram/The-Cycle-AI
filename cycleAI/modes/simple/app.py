@@ -3,6 +3,11 @@ import requests
 import json
 from dotenv import load_dotenv
 import os
+import sys
+
+# Add shared utilities to path
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
+from shared.baseball_utils import BaseballDataManager, setup_streamlit_config
 
 # Load environment variables
 load_dotenv()
@@ -13,6 +18,9 @@ def answer_baseball_question(query):
     Simple function that answers baseball questions using only the two API endpoints
     """
     print(f"🔍 Processing query: {query}")
+    
+    # Use shared data manager
+    data_manager = BaseballDataManager()
     
     # Determine what data we need
     is_player_query = any(keyword in query.lower() for keyword in [
@@ -109,126 +117,212 @@ def answer_baseball_question(query):
             'slg': 'slg', 'slugging': 'slg',
             'obp': 'obp', 'on base': 'obp'
         }
-        
+
         requested_stat = None
         for stat_name, stat_key in stat_requests.items():
             if stat_name in query_lower or f"most {stat_name}" in query_lower or f"top {stat_name}" in query_lower:
                 requested_stat = stat_key
                 break
-        
+
+        # Check for last name filtering (e.g., "players whose last name starts with A" or "last name starts with T")
+        last_name_filter = None
+        import re
+        # More flexible regex to handle different phrasings
+        name_match = re.search(r'last name starts with (?:an?\s+)?([A-Za-z])', query_lower)
+        if name_match:
+            last_name_filter = name_match.group(1).upper()
+            print(f"🔍 Detected last name filter: {last_name_filter}")  # Debug print
+
         # Process players based on query
         if requested_team and requested_stat:
             # Team-specific stat query
             team_players = []
             for player in all_data['players']:
-                if (isinstance(player, dict) and 
-                    player.get('team') == requested_team and 
-                    'stats' in player and 
+                if (isinstance(player, dict) and
+                    player.get('team') == requested_team and
+                    'stats' in player and
                     'batting' in player['stats']):
-                    
+
                     batting = player['stats']['batting']
                     stat_value = batting.get(requested_stat, 0)
                     if stat_value > 0:  # Only include players with the stat
                         team_players.append((player, stat_value))
-            
+
             # Sort by the requested stat (highest first)
             team_players.sort(key=lambda x: x[1], reverse=True)
-            
+
             for player, stat_value in team_players:
                 name = player.get('name', 'Unknown')
                 position = player.get('position', 'Unknown')
                 context_parts.append(f"{name} ({requested_team}, {position}) | {stat_value} {requested_stat}")
-        
+
+        elif last_name_filter:
+            # Filter by last name starting with specific letter
+            filtered_players = []
+            print(f"🔍 Filtering for last names starting with: {last_name_filter}")
+
+            for player in all_data['players']:
+                if isinstance(player, dict):
+                    name = player.get('name', 'Unknown')
+                    if name != 'Unknown':
+                        # More robust last name extraction
+                        name_parts = name.strip().split()
+
+                        if len(name_parts) >= 2:
+                            # Remove common suffixes
+                            suffixes = ['jr', 'jr.', 'sr', 'sr.', 'ii', 'iii', 'iv', 'v']
+                            last_part = name_parts[-1].lower()
+
+                            # If the last part is a suffix, use the second-to-last part
+                            if last_part in suffixes:
+                                if len(name_parts) >= 3:
+                                    last_name = name_parts[-2]
+                                else:
+                                    last_name = name_parts[-1]  # Fallback
+                            else:
+                                last_name = name_parts[-1]
+
+                            # Clean up the last name (remove punctuation)
+                            last_name = re.sub(r'[^\w]', '', last_name)
+
+                            if last_name.upper().startswith(last_name_filter):
+                                filtered_players.append(player)
+                                print(f"✅ Found: {name} -> {last_name}")  # Debug print
+                        elif len(name_parts) == 1:
+                            # Single name (rare in baseball)
+                            if name_parts[0].upper().startswith(last_name_filter):
+                                filtered_players.append(player)
+
+            print(f"📊 Found {len(filtered_players)} players with last name starting with {last_name_filter}")
+
+            # Sort filtered players by a meaningful stat (hits by default)
+            sorted_players = []
+            for player in filtered_players:
+                if 'stats' in player and 'batting' in player['stats']:
+                    batting = player['stats']['batting']
+                    hits = batting.get('hits', 0)
+                    sorted_players.append((player, hits))
+
+            # Sort by hits (highest first)
+            sorted_players.sort(key=lambda x: x[1], reverse=True)
+
+            context_parts.append(f"PLAYERS WITH LAST NAME STARTING WITH '{last_name_filter}':")
+            player_names = []
+            for player, hits in sorted_players:
+                name = player.get('name', 'Unknown')
+                if name != 'Unknown':
+                    player_names.append(name)
+
+            # Show just the names in a clean list
+            if player_names:
+                context_parts.append(f"Found {len(player_names)} players: {', '.join(player_names[:50])}")  # Limit to 50 for readability
+                if len(player_names) > 50:
+                    context_parts.append(f"... and {len(player_names) - 50} more players")
+            else:
+                context_parts.append("No players found with that last name starting letter.")
+
         else:
             # Default behavior: Sort players by key stats to ensure top performers are included
             players_to_include = []
-            
+
             # Get all players with batting stats
             for player in all_data['players']:
                 if isinstance(player, dict) and 'stats' in player and 'batting' in player['stats']:
                     batting = player['stats']['batting']
-                    doubles = batting.get('doubles', 0)
-                    hr = batting.get('homeRuns', 0)
-                    rbi = batting.get('rbi', 0)
-                    hits = batting.get('hits', 0)
-                    avg = batting.get('avg', 0)
-                    
-                    # Calculate a score to prioritize players with good stats
-                    stat_score = doubles + hr + (rbi / 10) + (hits / 5) + (avg * 100)
-                    players_to_include.append((player, stat_score))
-            
+                    doubles = batting.get('doubles', 0) or 0
+                    hr = batting.get('homeRuns', 0) or 0
+                    rbi = batting.get('rbi', 0) or 0
+                    hits = batting.get('hits', 0) or 0
+                    avg = batting.get('avg', 0) or 0
+
+                    # Ensure all values are numeric
+                    try:
+                        doubles = float(doubles) if doubles else 0
+                        hr = float(hr) if hr else 0
+                        rbi = float(rbi) if rbi else 0
+                        hits = float(hits) if hits else 0
+                        avg = float(avg) if avg else 0
+
+                        # Calculate a score to prioritize players with good stats
+                        stat_score = doubles + hr + (rbi / 10) + (hits / 5) + (avg * 100)
+                        players_to_include.append((player, stat_score))
+                    except (ValueError, TypeError):
+                        # Skip players with invalid stat data
+                        continue
+
             # Sort by stat score (highest first) and take top 100 players
-            players_to_include.sort(key=lambda x: x[1], reverse=True)
-            top_players = [player for player, score in players_to_include[:100]]
-            
-            for player in top_players:
-                name = player.get('name', 'Unknown')
-                team = player.get('team', 'Unknown')
-                position = player.get('position', 'Unknown')
-                
-                # Get comprehensive stats
-                stats_text = ""
-                if 'stats' in player:
-                    stats = player['stats']
-                    if 'batting' in stats:
-                        batting = stats['batting']
-                        # Get all available batting stats
-                        games = batting.get('gamesPlayed', 0)
-                        ab = batting.get('atBats', 0)
-                        runs = batting.get('runs', 0)
-                        hits = batting.get('hits', 0)
-                        doubles = batting.get('doubles', 0)
-                        triples = batting.get('triples', 0)
-                        hr = batting.get('homeRuns', 0)
-                        rbi = batting.get('rbi', 0)
-                        sb = batting.get('stolenBases', 0)
-                        cs = batting.get('caughtStealing', 0)
-                        bb = batting.get('walks', 0)
-                        so = batting.get('strikeOuts', 0)
-                        hbp = batting.get('hitByPitch', 0)
-                        sf = batting.get('sacrificeFlies', 0)
-                        avg = batting.get('avg', 0)
-                        obp = batting.get('obp', 0)
-                        slg = batting.get('slg', 0)
-                        ops = batting.get('ops', 0)
-                        wrc_plus = batting.get('wrcPlus', 0)
-                        war = batting.get('war', 0)
+            if players_to_include:
+                players_to_include.sort(key=lambda x: x[1], reverse=True)
+                top_players = [player for player, score in players_to_include[:100]]
 
-                        stats_text = f" | G:{games}, AB:{ab}, R:{runs}, H:{hits}, 2B:{doubles}, 3B:{triples}, HR:{hr}, RBI:{rbi}, SB:{sb}, BB:{bb}, SO:{so}, AVG:{avg}, OBP:{obp}, SLG:{slg}, OPS:{ops}"
+                for player in top_players:
+                    name = player.get('name', 'Unknown')
+                    team = player.get('team', 'Unknown')
+                    position = player.get('position', 'Unknown')
 
-                        if wrc_plus > 0:
-                            stats_text += f", wRC+:{wrc_plus}"
-                        if war > 0:
-                            stats_text += f", WAR:{war}"
+                    # Get comprehensive stats
+                    stats_text = ""
+                    if 'stats' in player:
+                        stats = player['stats']
+                        if 'batting' in stats:
+                            batting = stats['batting']
+                            # Get all available batting stats
+                            games = batting.get('gamesPlayed', 0)
+                            ab = batting.get('atBats', 0)
+                            runs = batting.get('runs', 0)
+                            hits = batting.get('hits', 0)
+                            doubles = batting.get('doubles', 0)
+                            triples = batting.get('triples', 0)
+                            hr = batting.get('homeRuns', 0)
+                            rbi = batting.get('rbi', 0)
+                            sb = batting.get('stolenBases', 0)
+                            cs = batting.get('caughtStealing', 0)
+                            bb = batting.get('walks', 0)
+                            so = batting.get('strikeOuts', 0)
+                            hbp = batting.get('hitByPitch', 0)
+                            sf = batting.get('sacrificeFlies', 0)
+                            avg = batting.get('avg', 0)
+                            obp = batting.get('obp', 0)
+                            slg = batting.get('slg', 0)
+                            ops = batting.get('ops', 0)
+                            wrc_plus = batting.get('wrcPlus', 0)
+                            war = batting.get('war', 0)
 
-                    if 'pitching' in stats:
-                        pitching = stats['pitching']
-                        # Get all available pitching stats
-                        wins = pitching.get('wins', 0)
-                        losses = pitching.get('losses', 0)
-                        era = pitching.get('era', 0)
-                        games = pitching.get('games', 0)
-                        gs = pitching.get('gamesStarted', 0)
-                        sv = pitching.get('saves', 0)
-                        ip = pitching.get('inningsPitched', 0)
-                        h = pitching.get('hits', 0)
-                        r = pitching.get('runs', 0)
-                        er = pitching.get('earnedRuns', 0)
-                        hr = pitching.get('homeRuns', 0)
-                        bb = pitching.get('walks', 0)
-                        so = pitching.get('strikeOuts', 0)
-                        whip = pitching.get('whip', 0)
-                        k9 = pitching.get('kPer9', 0)
-                        bb9 = pitching.get('bbPer9', 0)
-                        
-                        if stats_text:
-                            stats_text += f" | "
-                        else:
-                            stats_text = " | "
-                        
-                        stats_text += f"W:{wins}, L:{losses}, ERA:{era}, G:{games}, GS:{gs}, SV:{sv}, IP:{ip}, H:{h}, ER:{er}, HR:{hr}, BB:{bb}, SO:{so}, WHIP:{whip}, K/9:{k9}, BB/9:{bb9}"
-                
-                context_parts.append(f"- {name} ({team}, {position}){stats_text}")
+                            stats_text = f" | G:{games}, AB:{ab}, R:{runs}, H:{hits}, 2B:{doubles}, 3B:{triples}, HR:{hr}, RBI:{rbi}, SB:{sb}, BB:{bb}, SO:{so}, AVG:{avg}, OBP:{obp}, SLG:{slg}, OPS:{ops}"
+
+                            if isinstance(wrc_plus, (int, float)) and wrc_plus > 0:
+                                stats_text += f", wRC+:{wrc_plus}"
+                            if isinstance(war, (int, float)) and war > 0:
+                                stats_text += f", WAR:{war}"
+
+                        if 'pitching' in stats:
+                            pitching = stats['pitching']
+                            # Get all available pitching stats
+                            wins = pitching.get('wins', 0)
+                            losses = pitching.get('losses', 0)
+                            era = pitching.get('era', 0)
+                            games = pitching.get('games', 0)
+                            gs = pitching.get('gamesStarted', 0)
+                            sv = pitching.get('saves', 0)
+                            ip = pitching.get('inningsPitched', 0)
+                            h = pitching.get('hits', 0)
+                            r = pitching.get('runs', 0)
+                            er = pitching.get('earnedRuns', 0)
+                            hr = pitching.get('homeRuns', 0)
+                            bb = pitching.get('walks', 0)
+                            so = pitching.get('strikeOuts', 0)
+                            whip = pitching.get('whip', 0)
+                            k9 = pitching.get('kPer9', 0)
+                            bb9 = pitching.get('bbPer9', 0)
+
+                            if stats_text:
+                                stats_text += f" | "
+                            else:
+                                stats_text = " | "
+
+                            stats_text += f"W:{wins}, L:{losses}, ERA:{era}, G:{games}, GS:{gs}, SV:{sv}, IP:{ip}, H:{h}, ER:{er}, HR:{hr}, BB:{bb}, SO:{so}, WHIP:{whip}, K/9:{k9}, BB/9:{bb9}"
+
+                    context_parts.append(f"- {name} ({team}, {position}){stats_text}")
         
     if 'teams' in all_data:
         context_parts.append("\nTEAMS DATA:")
@@ -299,10 +393,14 @@ def answer_baseball_question(query):
 
                 # Get CVR and WAR if available
                 advanced_text = ""
-                if 'cvr' in team and team['cvr'] > 0:
-                    advanced_text += f" | CVR: {team['cvr']}"
-                if 'war' in team and team['war'] > 0:
-                    advanced_text += f" | WAR: {team['war']}"
+                if 'cvr' in team:
+                    cvr_value = team['cvr']
+                    if isinstance(cvr_value, (int, float)) and cvr_value > 0:
+                        advanced_text += f" | CVR: {cvr_value}"
+                if 'war' in team:
+                    war_value = team['war']
+                    if isinstance(war_value, (int, float)) and war_value > 0:
+                        advanced_text += f" | WAR: {war_value}"
 
                 context_parts.append(f"- {city} {name} ({division}, {league}){record_text}{stats_text}{advanced_text}")
 
@@ -313,7 +411,21 @@ def answer_baseball_question(query):
         from langchain_openai import ChatOpenAI
         llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0)
 
-        prompt = f"""You are a baseball expert. Answer the following question using ONLY the data provided below.
+        # Customize prompt based on query type
+        if last_name_filter:
+            prompt = f"""You are a baseball expert. The user asked for players whose last name starts with '{last_name_filter}'.
+
+Use ONLY the player list provided below. Do NOT add extra players or information not in the data.
+Just provide the list of players as shown in the data.
+
+QUESTION: {query}
+
+DATA:
+{context}
+
+Answer:"""
+        else:
+            prompt = f"""You are a baseball expert. Answer the following question using ONLY the data provided below.
 If the data doesn't contain the information needed to fully answer the question, say so clearly.
 
 QUESTION: {query}
