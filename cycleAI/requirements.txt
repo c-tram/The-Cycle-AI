@@ -15,5 +15,3 @@ pandas
 transformers
 torch
 sentence-transformers
-playwright
-lxml
